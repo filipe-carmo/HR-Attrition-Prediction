@@ -4,33 +4,60 @@ Models: Logistic Regression (Conservative) & Decision Tree (Aggressive)
 Uses recall-optimized thresholds for maximum attrition detection
 """
 
-import gradio as gr
-import pandas as pd
-import numpy as np
-import joblib
 import json
+from pathlib import Path
 
-# ✅ Direct import 
+import gradio as gr
+import joblib
+import numpy as np
+import pandas as pd
+
 from preprocessing import transform_new_data
+
+MODELS_DIR = Path(__file__).resolve().parent / "models"
 
 
 # ============================================
 # 1. LOAD MODELS AND METADATA
 # ============================================
 
-logreg = joblib.load("models/logistic_regression_best.pkl")
-dt = joblib.load("models/dt_attrition_model.joblib")
-scaler = joblib.load('models/scaler.pkl')
-imputer = joblib.load('models/imputer.pkl')
+logreg = joblib.load(MODELS_DIR / "logistic_regression_best.pkl")
+dt = joblib.load(MODELS_DIR / "dt_attrition_model.joblib")
+scaler = joblib.load(MODELS_DIR / "scaler.pkl")
+imputer = joblib.load(MODELS_DIR / "imputer.pkl")
 
-with open("models/logreg_model_metadata.json", 'r') as f:
-    logreg_metadata = json.load(f)
-with open("models/dt_model_metadata.json", 'r') as f:
-    dt_metadata = json.load(f)
+logreg_metadata = json.loads((MODELS_DIR / "logreg_model_metadata.json").read_text())
+dt_metadata = json.loads((MODELS_DIR / "dt_model_metadata.json").read_text())
 
 # Recall-optimized thresholds 
 THRESHOLD_LOGREG = logreg_metadata['thresholds']['recall_optimized']  # 0.400
 THRESHOLD_DT = dt_metadata['thresholds']['recall_optimized']  # 0.320
+
+LOGREG_LABEL = "Logistic Regression (Conservative)"
+DT_LABEL = "Decision Tree (Aggressive)"
+
+# The 12 raw inputs; transform_new_data turns them into the 18 model features
+REQUIRED_COLS = [
+    'JobSatisfaction', 'JobInvolvement', 'EnvironmentSatisfaction', 'WorkLifeBalance',
+    'NumCompaniesWorked', 'TotalWorkingYears', 'YearsAtCompany',
+    'Department', 'JobRole', 'BusinessTravel', 'MaritalStatus', 'OverTime'
+]
+
+# All roles in the dataset. Only 6 have their own model feature; the other 3
+# (Sales Executive, Research Scientist, Human Resources) are the baseline.
+JOB_ROLES = [
+    "Sales Executive", "Research Scientist", "Laboratory Technician",
+    "Manufacturing Director", "Healthcare Representative", "Manager",
+    "Sales Representative", "Research Director", "Human Resources",
+]
+
+
+def select_model(model_name):
+    """Return (model, recall-optimized threshold, strategy label) for a dropdown choice."""
+    if model_name == LOGREG_LABEL:
+        return logreg, THRESHOLD_LOGREG, "Conservative"
+    return dt, THRESHOLD_DT, "Aggressive"
+
 
 # ============================================
 # 2. PREDICTION FUNCTION
@@ -63,19 +90,11 @@ def predict_attrition(
     }
     
     try:
-        # Apply preprocessing (uses your preprocessing.py transform_new_data!)
+        # Same preprocessing as training, with the fitted imputer and scaler
         df_processed = transform_new_data(input_data, scaler, imputer)
         
-        # Select model and threshold
-        if model_name == "Logistic Regression (Conservative)":
-            model = logreg
-            threshold = THRESHOLD_LOGREG
-            model_desc = "Conservative"
-        else:
-            model = dt
-            threshold = THRESHOLD_DT
-            model_desc = "Aggressive"
-        
+        model, threshold, model_desc = select_model(model_name)
+
         # Get probability
         proba = model.predict_proba(df_processed)[0, 1]
         
@@ -135,29 +154,17 @@ def predict_batch(csv_file, model_name):
         return "⚠️ Please upload a CSV file", None
     
     try:
-        df = pd.read_csv(csv_file.name)
-        
-        # Only 12 raw columns needed (18 features after transformation)
-        required_cols = [
-            'JobSatisfaction', 'JobInvolvement', 'EnvironmentSatisfaction', 'WorkLifeBalance',
-            'NumCompaniesWorked', 'TotalWorkingYears', 'YearsAtCompany',
-            'Department', 'JobRole', 'BusinessTravel', 'MaritalStatus', 'OverTime'
-        ]
-        
-        missing = [c for c in required_cols if c not in df.columns]
+        # gr.File passes a file path (str) in Gradio 4; older versions pass a tempfile object
+        df = pd.read_csv(getattr(csv_file, "name", csv_file))
+
+        missing = [c for c in REQUIRED_COLS if c not in df.columns]
         if missing:
             return f"❌ **Missing columns:** {', '.join(missing)}", None
-        
-        # Select model and threshold
-        if model_name == "Logistic Regression (Conservative)":
-            model = logreg
-            threshold = THRESHOLD_LOGREG
-        else:
-            model = dt
-            threshold = THRESHOLD_DT
-        
+
+        model, threshold, _ = select_model(model_name)
+
         # Process all rows at once using transform_new_data
-        df_processed = transform_new_data(df[required_cols], scaler, imputer)
+        df_processed = transform_new_data(df[REQUIRED_COLS], scaler, imputer)
         
         # Get predictions
         probas = model.predict_proba(df_processed)[:, 1]
@@ -170,8 +177,9 @@ def predict_batch(csv_file, model_name):
         results_df['Prediction_Label'] = results_df['Prediction'].map({0: 'Stay', 1: 'Leave'})
         results_df['Risk_Level'] = pd.cut(
             probas, 
-            bins=[0, 0.3, 0.5, 0.7, 1.0], 
-            labels=['Low', 'Medium', 'High', 'Critical']
+            bins=[-np.inf, 0.3, 0.5, 0.7, np.inf],
+            labels=['Low', 'Medium', 'High', 'Critical'],
+            right=False,  # same cut-offs as the single prediction: [0.3, 0.5), [0.5, 0.7), ...
         )
         
         # Summary
@@ -239,8 +247,8 @@ with gr.Blocks(title="HR Attrition Prediction") as demo:
                     gr.Markdown("### 📋 Employee Information")
                     
                     model_selector = gr.Dropdown(
-                        choices=["Logistic Regression (Conservative)", "Decision Tree (Aggressive)"],
-                        value="Logistic Regression (Conservative)",
+                        choices=[LOGREG_LABEL, DT_LABEL],
+                        value=LOGREG_LABEL,
                         label="Select Model"
                     )
                     
@@ -266,10 +274,8 @@ with gr.Blocks(title="HR Attrition Prediction") as demo:
                         label="Department"
                     )
                     
-                    # Only the 6 job roles that matter in the model
                     job_role = gr.Dropdown(
-                        ["Research Director", "Sales Representative", "Laboratory Technician",
-                         "Manufacturing Director", "Healthcare Representative", "Manager"],
+                        JOB_ROLES,
                         value="Laboratory Technician",
                         label="Job Role"
                     )
@@ -331,7 +337,7 @@ with gr.Blocks(title="HR Attrition Prediction") as demo:
             
             **Categorical:**
             - `Department`: Sales, Research & Development, Human Resources
-            - `JobRole`: Research Director, Sales Representative, Laboratory Technician, Manufacturing Director, Healthcare Representative, Manager
+            - `JobRole`: Sales Executive, Research Scientist, Laboratory Technician, Manufacturing Director, Healthcare Representative, Manager, Sales Representative, Research Director, Human Resources
             - `BusinessTravel`: Travel_Rarely, Travel_Frequently, Non-Travel
             - `MaritalStatus`: Single, Married, Divorced
             - `OverTime`: Yes, No
@@ -343,8 +349,8 @@ with gr.Blocks(title="HR Attrition Prediction") as demo:
                 with gr.Column():
                     csv_file = gr.File(label="Upload CSV File", file_types=[".csv"])
                     batch_model = gr.Dropdown(
-                        ["Logistic Regression (Conservative)", "Decision Tree (Aggressive)"],
-                        value="Logistic Regression (Conservative)",
+                        [LOGREG_LABEL, DT_LABEL],
+                        value=LOGREG_LABEL,
                         label="Select Model"
                     )
                     batch_btn = gr.Button("📊 Predict All Employees", variant="primary", size="lg")

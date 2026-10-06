@@ -8,3 +8,5 @@ data/
 *.xlsx
 *.parquet
 .idea/
+.pytest_cache/
+.ipynb_checkpoints/

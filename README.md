@@ -1,201 +1,83 @@
-HR Attrition Project
+# HR Attrition Prediction
 
-Group and Repository
+[![Tests](https://github.com/filipe-carmo/EDSB25_10/actions/workflows/tests.yml/badge.svg)](https://github.com/filipe-carmo/EDSB25_10/actions/workflows/tests.yml)
+[![Live demo](https://img.shields.io/badge/demo-Hugging%20Face%20Space-yellow)](https://huggingface.co/spaces/filipe-carmo/hr-attrition-prediction)
+![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11-blue)
 
-- Filipe Brandão Carmo – 20240828
-- João Silva – 20241655
-- Rita Marques – 20242019
-- Sara Henriques – 20242070
+**Predicting which employees are likely to leave, so HR can act before they do.** An end-to-end machine learning project: business framing, EDA, feature engineering, five models with recall-optimised decision thresholds, and a Gradio app deployed to Hugging Face through GitHub Actions.
 
-GitHub repository: https://github.com/filipe-carmo/EDSB25_10  
-Hugging Face Space: https://huggingface.co/spaces/filipe-carmo/hr-attrition-prediction
+**▶ Try it: [huggingface.co/spaces/filipe-carmo/hr-attrition-prediction](https://huggingface.co/spaces/filipe-carmo/hr-attrition-prediction)**
 
-I. Introduction and Methodology
+![The deployed app scoring a high-risk employee profile](docs/app-screenshot.png)
 
-The objective of this capstone project is to synthesize and apply the diverse skills and knowledge acquired throughout the coursework by developing an end-to-end data science solution focused on predicting employee attrition. The project integrates data exploration, feature engineering, machine learning, evaluation, and deployment, while emphasizing clear communication of results for business stakeholders.
+## The problem
 
-This repository implements a full pipeline from business problem framing to deployment: data ingestion and cleaning, exploratory data analysis, feature selection, model training (Logistic Regression, Decision Tree, Random Forest, XGBoost, Neural Networks), threshold optimization with business-focused recall targets, and a Gradio app (via app.py and space.yaml) for serving predictions.
+A consultancy loses about 16% of its people, and every departure costs hiring and ramp-up time. HR wants to know **who is at risk and why**, early enough to intervene. Missing a leaver costs more than an unnecessary check-in, so the models are tuned for **recall**: instead of the default 0.5, each model's decision threshold was chosen on the validation set to catch at least 70% of leavers.
 
-II. The Business Problem
+## Results
 
-High turnover rates are costly and disruptive, making it essential for HR to anticipate which employees are likely to leave. We are tasked with assisting a multinational consultancy firm in predicting employee attrition.
+Held-out test set: 294 employees, 47 of whom left.
 
-The primary goal is to predict whether an employee will leave the company, based on the data provided. Secondary goals include identifying key factors influencing attrition and recommending strategies to retain valuable employees.
+| Model | ROC AUC | Recall | Precision | Missed leavers | False alarms |
+|---|---:|---:|---:|---:|---:|
+| **Logistic Regression** (deployed, "conservative") | **0.81** | 0.77 | **0.34** | 11 | **70** |
+| Decision Tree (deployed, "aggressive") | 0.72 | **0.79** | 0.25 | **10** | 111 |
+| Random Forest | 0.76 | 0.72 | 0.30 | 13 | 78 |
+| Neural Network (MLP) | 0.73 | 0.70 | 0.32 | 14 | 70 |
+| XGBoost | 0.72 | 0.66 | 0.23 | 16 | 103 |
 
-The HR department and executive management will be the primary consumers of the insights, and they expect actionable recommendations based on the analysis.
+Logistic Regression gives the best balance: it catches 36 of 47 leavers with the fewest false alarms and the best ranking quality. The Decision Tree catches one more leaver at the cost of 41 more false alarms, which suits a proactive retention programme. The app lets HR choose between the two. Source: [`models/model_comparison_recall_optimized.csv`](models/model_comparison_recall_optimized.csv).
 
-III. Organization
+**Strongest attrition signals** (Logistic Regression coefficients): working overtime, being single, frequent business travel, the Laboratory Technician role and having worked at many companies push risk up; a longer career, higher job and environment satisfaction and working in R&D pull it down.
 
-Repository structure
-.github/ – GitHub configuration for Git Actions
+## Approach
 
-data/ – Raw and intermediate datasets used for analysis and modeling
+```mermaid
+flowchart LR
+    A[IBM HR dataset<br/>1,470 employees, 35 columns] --> B[EDA and<br/>data cleaning]
+    B --> C[Feature engineering<br/>log tenure, one-hot,<br/>VIF-based selection]
+    C --> D[18 features]
+    D --> E[5 models<br/>GridSearchCV + StratifiedKFold<br/>SMOTE / class weights]
+    E --> F[Recall-optimised<br/>thresholds]
+    F --> G[Gradio app on<br/>Hugging Face]
+```
 
-models/ – Saved model artifacts (joblib) and metadata (JSON) used by the notebooks and the app
+- **Data:** the IBM HR Analytics Employee Attrition dataset (`data/raw/`), split 60/20/20 with stratification.
+- **Features:** log-transformed tenure (`TotalWorkingYears`, `YearsAtCompany`), scaled satisfaction scores, one-hot encoded role/department/travel/marital status/overtime. Multicollinear features were removed with VIF analysis, leaving 18.
+- **Models:** Logistic Regression, Decision Tree, Random Forest, XGBoost and an MLP. Each was tuned with cross-validated grid search, with class imbalance handled by SMOTE or class weights.
+- **Thresholds:** each model keeps a default, an F1-optimised and a recall-optimised threshold in its metadata JSON; the app uses the recall-optimised one.
+- **Deployment:** `preprocessing.py` is shared by the notebooks (`preprocess`) and the app (`transform_new_data`), and a test checks that both produce identical features. Pushing app or model changes to `main` syncs them to the Hugging Face Space ([workflow](.github/workflows/sync-to-hf.yml)).
 
-notebooks/ – All Jupyter notebooks for business framing, EDA, feature engineering, modeling, and final evaluation
+## Run it locally
 
-old files/ – Legacy or exploratory files kept for reference, not part of the main pipeline
+```bash
+git clone https://github.com/filipe-carmo/EDSB25_10.git
+cd EDSB25_10
+python -m venv .venv && source .venv/bin/activate
 
-project_brief/ – Original project description, requirements, and briefing documents
+pip install -r requirements.txt   # app only (pinned to match the saved models)
+python app.py                     # http://127.0.0.1:7860
 
-reports/ – Final presentation
+pip install pytest && pytest -q tests
+```
 
-scripts/ – Auxiliary Python scripts
+To re-run the analysis, install `requirements-dev.txt` and run the notebooks in order (1 to 9).
 
-venv/ – Local virtual environment (ignored by Git)
+## Repository
 
-.gitignore – Excludes unnecessary files from version control
+```text
+app.py               Gradio app: single and batch (CSV) predictions
+preprocessing.py     Shared training/inference preprocessing
+notebooks/           1 business problem → 2 EDA → 3 features → 4-8 models → 9 evaluation
+models/              Trained models, scaler/imputer, metadata and comparison tables
+data/                Raw dataset and processed train/val/test splits
+tests/               Pipeline consistency, model performance and app tests
+reports/             Final presentation (PowerPoint)
+project_brief/       Original brief and data dictionary
+```
 
-app.py – Gradio-based application for interactive inference and deployment (local or HF Space)
+## Team
 
-preprocessing.py – Main preprocessing and feature engineering module used across models and the app
+Group capstone project (EDSB25, group 10) by **Filipe Brandão Carmo**, João Silva, Rita Marques and Sara Henriques.
 
-README.md – Project overview and instructions
-
-README_HF.txt – Hugging Face Space–specific description and usage notes
-
-requirements-dev.txt – Full development dependencies (notebooks, plotting, modeling)
-
-requirements.txt – Minimal runtime dependencies for the app and core pipeline
-
-space.yaml – Hugging Face Space configuration
-
-Notebooks structure
-All notebooks are located in notebooks/ and follow the pipeline order:
-
-1.-Business-Problem-Data-Collection-and-Initial-Processing.ipynb
-
-Defines the business context, documents assumptions, and loads the raw HR dataset from data/ into a clean tabular format.
-
-2.-Exploratory-Data-Analysis.ipynb
-
-Performs descriptive statistics, visual EDA, and class imbalance inspection to understand attrition patterns and potential data quality issues.
-
-3.-Feature-Eng-and-Feature-Selection.ipynb
-
-Runs correlation and statistical analyses, engineers domain features (e.g., log-transformed tenure, satisfaction-related variables), and defines the final 18-feature set used by all models.
-
-4.-Logistic_Regression.ipynb
-
-Trains a Logistic Regression model on the shared 18-feature dataset.
-
-Applies SMOTE to rebalance the training data and uses StratifiedKFold + GridSearchCV to tune regularization, solver, and class weights.
-
-Implements dual threshold optimization: F1-oriented and recall-oriented, with manual adjustment for robustness on the test set.
-
-Saves the best model and metadata into models/.
-
-5.-Decision-Tree-model.ipynb
-
-Builds a Decision Tree classifier with strong interpretability constraints (limited depth, leaves, and pruning).
-
-Uses class weighting to handle imbalance and a large hyperparameter grid with StratifiedKFold + GridSearchCV.
-
-Applies dual threshold optimization and exports the model and feature importances to models/.
-
-6.-Random-Forest.ipynb
-
-Trains a Random Forest classifier using the same preprocessing pipeline.
-
-Tunes tree depth, number of estimators, and other parameters, computes ROC/AUC and F1, and analyzes feature importance.
-
-Saves the selected model and metadata into models/.
-
-7.-XGBOOST.ipynb
-
-Experiments with XGBoost to improve minority-class performance, tuning learning rate, depth, and class imbalance parameters.
-
-8.-Neural-Networks.ipynb
-
-Trains one or more feedforward neural networks (MLP) on the 18-feature dataset and compares performance to tree-based and linear models.
-
-9.-Evaluation.ipynb
-
-Consolidates test-set metrics across all models (accuracy, precision, recall, F1, ROC/AUC, confusion matrices).
-
-Highlights trade-offs and proposes recommended configurations for different HR use cases (high recall vs. balanced).
-
-IV. Git and Documentation Practices
-
-README.md provides a high-level overview, repository map, and execution instructions.
-
-Code in preprocessing.py, app.py, and key scripts/notebooks includes comments and (where applicable) docstrings to clarify data transformations and model logic.
-
-Dependencies are defined in requirements.txt (runtime) and requirements-dev.txt (development / notebooks).
-
-The repository is organized into clear folders (data/, notebooks/, models/, scripts/, reports/, etc.) rather than mixing everything in the root.
-
-.gitignore excludes non-essential files such as venv/, .ipynb_checkpoints/, large artifacts, and OS-specific files.
-
-Commit messages and file names are written to be meaningful and consistent with the notebook numbering and project phases.
-
-V. How to Run the Project
-
-1. Prerequisites
-Python 3.10+ 
-
-Git installed
-
-Recommended: virtual environment (venv or conda)
-
-2. Setup
-Clone the repository:
-
-git clone <your-repo-url>
-
-cd <your-repo-folder>
-
-(Optional if you are not using the existing venv/) Create and activate a virtual environment:
-
-python -m venv .venv
-
-source .venv/bin/activate (Linux/Mac)
-
-.venv\Scripts\activate (Windows)
-
-Install dependencies:
-
-Development (notebooks + modeling): pip install -r requirements-dev.txt
-
-Runtime / app only: pip install -r requirements.txt
-
-3. Reproduce analysis and models
-Ensure the HR attrition dataset is available under data/ in the expected path used in the notebooks.
-
-Open the notebooks in notebooks/ and run them in numerical order (1 to 9).
-
-Each modeling notebook imports preprocessing.py, trains the model, optimizes thresholds, and saves outputs into models/.
-
-4. Run the Gradio app locally
-After installing runtime dependencies and ensuring a model + metadata exist in models/, run:
-
-python app.py
-
-Open the URL printed in the console (for local runs, typically http://127.0.0.1:7860) to access the interface and score new employee records.
-
-The app can also be used on https://huggingface.co/spaces/filipe-carmo/hr-attrition-prediction
-
-VI. Deliverables
-
-Jupyter Notebooks / Python Scripts
-
-Full workflow from business problem framing and EDA to preprocessing, modeling, evaluation, and deployment artifacts.
-
-Final Presentation
-
-Professional slide deck in reports/ summarizing problem, approach, model comparison, and recommendations for HR and management.
-
-Backup Slides
-
-Extra material (detailed metrics, threshold analyses, feature importance plots, ablation notes) to support discussion and questions.
-
-GitHub Repository
-
-Organized, reproducible repository including:
-
-notebooks/, scripts/, data/, models/, reports/, project_brief/
-
-README.md and README_HF.txt
-
-requirements*.txt, .gitignore, space.yaml, and app.py for deployment
+My part: I built and deployed the Gradio app and the GitHub Actions → Hugging Face pipeline, set up the repository structure and shared preprocessing module, revised the modelling notebooks, and put together the final report.
